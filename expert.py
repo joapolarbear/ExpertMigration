@@ -2,6 +2,8 @@ import networkx as nx
 
 from dpro.trace_utils import gen_long_name
 
+from utils import gen_pid
+
 per_token_comm_time = 1
 
 class Expert:
@@ -13,7 +15,7 @@ class Expert:
 
         self.pipeline_degree = None
 
-        self.prefix = f"Worker{self.worker_id}"
+        self.prefix = gen_pid(0, self.worker_id)
 
     def add_prefix(self, name, _prefix=None):
         if _prefix is None:
@@ -21,7 +23,7 @@ class Expert:
         else:
             return gen_long_name(_prefix, name)
 
-    def gen_graph(self, token_ids: list, phase="FW"):
+    def gen_graph(self, token_ids: list, prev_work_id, phase="FW"):
         '''
         Pararmeters
         -----------
@@ -51,23 +53,38 @@ class Expert:
         }
 
         for token_id in token_ids:
-            ### Token pre-calc
-            pre_comm_op = gen_long_name(self.prefix, f"Comm.Expert{self.expert_id}.RECV", f"pre-calc_{phase}_{token_id}")
-            edges_to_add.append((virtual_start_op, pre_comm_op))
+            if prev_work_id == self.worker_id:
+                ### Expert training
+                comp_op = gen_long_name(self.prefix, f"{phase}.Expert{self.expert_id}", f"{token_id}")
+                edges_to_add.append((virtual_start_op, comp_op))
+                edges_to_add.append((comp_op, virtual_end_op))
+                node_attrs[comp_op] = self.dur_fw if phase == "FW" else self.dur_bw
+            else:
+                root_pid = gen_pid(0, prev_work_id)
 
-            ### Expert training
-            comp_op = gen_long_name(self.prefix, f"{phase}.Expert{self.expert_id}", f"{token_id}")
-            edges_to_add.append((pre_comm_op, comp_op))
+                ### Token pre-calc
+                pre_comm_op_root = gen_long_name(root_pid, f"Comm.Expert{self.expert_id}.SEND", f"pre-calc_{phase}_{token_id}")
+                pre_comm_op = gen_long_name(self.prefix, f"Comm.Expert{self.expert_id}.RECV", f"pre-calc_{phase}_{token_id}")
+                edges_to_add.append((virtual_start_op, pre_comm_op_root))
+                edges_to_add.append((pre_comm_op_root, pre_comm_op))
 
-            ### Token post-calc
-            post_comm_op = gen_long_name(self.prefix, f"Comm.Expert{self.expert_id}.SEND", f"post-calc_{phase}_{token_id}")
-            edges_to_add.append((comp_op, post_comm_op))
-            edges_to_add.append((post_comm_op, virtual_end_op))
+                ### Expert training
+                comp_op = gen_long_name(self.prefix, f"{phase}.Expert{self.expert_id}", f"{token_id}")
+                edges_to_add.append((pre_comm_op, comp_op))
 
-            ### Decide the avg of each nodes
-            node_attrs[pre_comm_op] = per_token_comm_time
-            node_attrs[comp_op] = self.dur_fw if phase == "FW" else self.dur_bw
-            node_attrs[post_comm_op] = per_token_comm_time
+                ### Token post-calc
+                post_comm_op = gen_long_name(self.prefix, f"Comm.Expert{self.expert_id}.SEND", f"post-calc_{phase}_{token_id}")
+                post_comm_op_root = gen_long_name(root_pid, f"Comm.Expert{self.expert_id}.RECV", f"post-calc_{phase}_{token_id}")
+                edges_to_add.append((comp_op, post_comm_op))
+                edges_to_add.append((post_comm_op, post_comm_op_root))
+                edges_to_add.append((post_comm_op_root, virtual_end_op))
+
+                ### Decide the avg of each nodes
+                node_attrs[pre_comm_op_root] = per_token_comm_time
+                node_attrs[pre_comm_op] = per_token_comm_time
+                node_attrs[comp_op] = self.dur_fw if phase == "FW" else self.dur_bw
+                node_attrs[post_comm_op] = per_token_comm_time
+                node_attrs[post_comm_op_root] = per_token_comm_time
 
         graph.add_edges_from(edges_to_add)
         nx.set_node_attributes(graph, node_attrs, name="avg")

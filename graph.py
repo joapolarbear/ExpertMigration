@@ -4,6 +4,7 @@ from typing import List
 from dpro.trace_utils import gen_long_name
 
 from expert import Expert
+from utils import gen_pid
 
 def gen_full_graph(experts: List[Expert]):
     token2expert = [0, 1, 0, 1, 2, 2, 0, 1]
@@ -17,12 +18,12 @@ def gen_full_graph(experts: List[Expert]):
     edges_to_add = []
     default_worker_id = 0
 
-    default_pid = f"Worker{default_worker_id}"
-    fw_op1 = gen_long_name(default_pid, "FW.1")
-    fw_op2 = gen_long_name(default_pid, "FW.2")
+    root_pid = gen_pid(0, default_worker_id)
+    fw_op1 = gen_long_name(root_pid, "FW.1")
+    fw_op2 = gen_long_name(root_pid, "FW.2")
 
-    bw_op1 = gen_long_name(default_pid, "BW.1")
-    bw_op2 = gen_long_name(default_pid, "BW.2")
+    bw_op1 = gen_long_name(root_pid, "BW.1")
+    bw_op2 = gen_long_name(root_pid, "BW.2")
 
     node_attrs = {
         fw_op1: 3,
@@ -36,7 +37,7 @@ def gen_full_graph(experts: List[Expert]):
 
         ### Forward phase
         graph, source_nodes, end_nodes = expert.gen_graph(
-            expert2tokens[expert.expert_id], phase="FW")
+            expert2tokens[expert.expert_id], default_worker_id, phase="FW")
         G = nx.union(G, graph)
         for source_node in source_nodes:
             edges_to_add.append((fw_op1, source_node))
@@ -44,7 +45,7 @@ def gen_full_graph(experts: List[Expert]):
             edges_to_add.append((end_node, fw_op2))
 
         graph, source_nodes, end_nodes = expert.gen_graph(
-            expert2tokens[expert.expert_id], phase="BW")
+            expert2tokens[expert.expert_id], default_worker_id, phase="BW")
         G = nx.union(G, graph)
         for source_node in source_nodes:
             edges_to_add.append((bw_op2, source_node))

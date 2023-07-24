@@ -6,7 +6,7 @@ from dpro.dag_utils import cal_edge_cost, dag_longest_path
 from expert import Expert
 from graph import gen_full_graph
 
-dpro.init(".", "test")
+dpro.init(".workspace/", "test")
 
 WORKER_NUM = 2
 EXPERT_NUM = 3
@@ -18,13 +18,15 @@ experts = [Expert(expert_id, expert2worker[expert_id], dur_fw=1, dur_bw=2)
 G = gen_full_graph(experts)
 
 replayer = Replayer(dag=G, _step_num=1, leaf_dirs=None, 
-                dump_path=".",
-                comm_backend="NCCL",
+                dump_path=".workspace/",
+                comm_backend="default",
                 byteps_graph=None)
+
+# import pdb; pdb.set_trace()
 replayer.replay(verbose=True)
 cal_edge_cost(replayer.exct_dag)
 critical_path = dag_longest_path(replayer.exct_dag, None, 
-                    weight="avg", default_weight=0, _debug_level=1)
+                    weight="weight", default_weight=0, _debug_level=1)
 
 
 
