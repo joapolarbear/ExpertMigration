@@ -64,7 +64,12 @@ class Profiler:
                 ### backward hook
                 t = get_timestamp()
                 unique_name = self.unique_name(_name, phase=phase)
-                self.timestamps.append(("BW", unique_name, t, []))
+                attr = []
+                if isinstance(module, deepspeed.moe.experts.Experts):
+                    ### input[0] is of shape [N_worker, N_expert/worker, capacity, d_model]
+                    # print(len(input), input[0].shape)
+                    attr = list(grad_input[0].shape)
+                self.timestamps.append(("BW", unique_name, t, attr))
         else:
             raise
         return hook_fn
@@ -104,13 +109,15 @@ class Profiler:
             self.name_stat[name]["cnt_in_step"] -= 1
         return _unique_name
 
-    def step(self, dump=False):
+    def step_start(self):
+        self.name_stat = {}
+        self.timestamps = []
+        self.start_time = get_timestamp()
+
+    def step_end(self, dump=False):
+        t = get_timestamp()
+        self.timestamps.append(("UPDATE_", "UPDATE", t, []))
         if dump:
             self.dump()
-
-        self.name_stat = {}
-        self.start_time = get_timestamp()
-        self.timestamps = []
-
         self.step_num += 1
 

@@ -4,10 +4,13 @@ import numpy as np
 from typing import List, Dict
 import networkx as nx
 
+import dpro
 from dpro.trace_utils import gen_long_name
 
 from expert import Expert, DynamicGraph, MoEAssign
 import core
+
+dpro.init(".workspace/", "test")
 
 def is_expert_event(event):
     return event["args"]["op_name"].startswith("MoE_Experts")
@@ -60,9 +63,14 @@ def parse_rawtrace(path=".workspace/rawtrace.json"):
             op_stat[name] = {}
         if phase == "FW":
             op_stat[name]["fw_event_id"] = event_id
-        else:
+        elif phase == "BW":
             op_stat[name]["bw_event_id"] = event_id
+        elif phase == "UPDATE_":
+            op_stat[name]["update_event_id"] = event_id
+        else:
+            raise
 
+        print(f"Parse event {trace_name}")
         if is_expert_event(event):
             if phase == "FW":
                 # of shape [N_worker, N_expert/worker, capacity, d_model] or [N, E/N, C, M]
@@ -76,7 +84,8 @@ def parse_rawtrace(path=".workspace/rawtrace.json"):
                 unsure_event_ids.add(event_id)
                 experts = moe_layer_info[name]
             ### Collect info for graph construction
-            dynamic_graph.met_expert_for_all_worker(experts)
+            dynamic_graph.met_expert_for_all_worker(experts, phase)
+            prev_trace_name = None
         else:
             ### Collect info for graph construction
             if prev_trace_name:
@@ -86,11 +95,10 @@ def parse_rawtrace(path=".workspace/rawtrace.json"):
             if phase == "BW" and len(events) > 1 and is_expert_event(events[-2]):
                 unsure_event_ids.add(event_id)
 
-            if name.startswith("MoE_Gate"):
-                if phase == "FW":
-                    mask_wo_drop, mask_w_drop = attr
-                    event["args"]["mask_wo_drop"] = mask_wo_drop
-                    event["args"]["mask_w_drop"] = mask_w_drop
+            if name.startswith("MoE_Gate") and phase == "FW":
+                mask_wo_drop, mask_w_drop = attr
+                event["args"]["mask_wo_drop"] = mask_wo_drop
+                event["args"]["mask_w_drop"] = mask_w_drop
             else:
                 pass
 
@@ -103,6 +111,8 @@ def cal_bw_to_fw_ratio(op_stat: Dict, events: List, unsure_event_ids: set):
     non_expert_fw_accum = []
     non_expert_bw_accum = []
     for op_name in op_stat.keys():
+        if "update_event_id" in op_stat[op_name]:
+            continue
         if op_stat[op_name]["fw_event_id"] in unsure_event_ids or \
             op_stat[op_name]["bw_event_id"] in unsure_event_ids:
             pass
@@ -148,7 +158,7 @@ def correct_unsure_event_ts(op_stat: Dict, events: List, unsure_event_ids: set,
         x2 = _check(c_bw_ed - e_bw_ed - bw_to_fw_ratio * c_fw_dur)
         x3 = _check(e_fw_st - c_fw_ed)
         x4 = _check(a_bw_ed - c_bw_ed - bw_to_fw_ratio * a_fw_dur)
-        print(x_list)
+        # print(x_list)
         t_all_to_all = min(x_list)
 
         ### FW timestamps
@@ -225,35 +235,36 @@ if __name__ == '__main__':
     bw_to_fw_ratio = cal_bw_to_fw_ratio(op_stat, events, unsure_event_ids)
     print("bw_to_fw_ratio ", bw_to_fw_ratio)
 
-    correct = True
-    if correct:
-        correct_unsure_event_ts(op_stat, events, unsure_event_ids, 
-                                moe_layer_info, bw_to_fw_ratio)
+    correct_unsure_event_ts(op_stat, events, unsure_event_ids, 
+                            moe_layer_info, bw_to_fw_ratio)
         
+    dump_traces(events)
+    
     ### Assign node avg
     for op_name in op_stat:
         if op_name in moe_layer_info:
             experts = moe_layer_info[op_name]
 
-            fw_dur = events[op_stat[op_name]["fw_event_id"]]["dur"]
+            fw_dur = events[op_stat[op_name]["fw_event_id"]]["dur"] / 1e3
             for expert in experts:
                 expert.set_comp_time_arg(fw_dur, bw_to_fw_ratio)
 
-            t_all_to_all = events[op_stat[op_name]["pre-calc_FW_event_id"]]["dur"]
+            t_all_to_all = events[op_stat[op_name]["pre-calc_FW_event_id"]]["dur"] / 1e3
             for expert in experts:
                 expert.set_comm_time_arg(t_all_to_all, core.INTRA_MACHINE_BW)
-            
+        elif "update_event_id" in op_stat[op_name]:
+            ### Update ops
+            rawname = gen_rawname("UPDATE_", op_name)
+            avg = events[op_stat[op_name]["update_event_id"]]["dur"] / 1e3
+            dynamic_graph.set_avg_for_all_worker(rawname, avg)
         else:
             rawname = gen_rawname("FW", op_name)
-            avg = events[op_stat[op_name]["fw_event_id"]]["dur"]
+            avg = events[op_stat[op_name]["fw_event_id"]]["dur"] / 1e3
             dynamic_graph.set_avg_for_all_worker(rawname, avg)
 
             rawname = gen_rawname("BW", op_name)
-            avg = events[op_stat[op_name]["bw_event_id"]]["dur"]
+            avg = events[op_stat[op_name]["bw_event_id"]]["dur"] / 1e3
             dynamic_graph.set_avg_for_all_worker(rawname, avg)
-
-    
-    dump_traces(events)
 
     import numpy as np
     moe_assignments = {}
