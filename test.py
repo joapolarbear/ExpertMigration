@@ -304,7 +304,42 @@ def test_faster_moe(moe_layer_info, all_worker2token2expert):
 
     return all_moe_solutions
 
+import random
+def _workload_metric(worker2token2expert, expert2worker):
+    N = len(worker2token2expert)
+    load_per_worker = np.zeros(N)
+    for ep_id in worker2token2expert.flatten():
+        load_per_worker[expert2worker[ep_id]] += 1
+    load_per_worker /= sum(load_per_worker)
+    return np.linalg.norm(load_per_worker)
+
+def _random_change_mapping(expert2worker, num_worker):
+    assert num_worker > 1
+    rand_idx = random.randint(0, len(expert2worker)-1)
+    while True:
+        new_worker_id = random.randint(0, num_worker-1)
+        if new_worker_id != expert2worker[rand_idx]:
+            ret = np.copy(expert2worker)
+            ret[rand_idx] = new_worker_id
+            return ret
+
 def test_random(moe_layer_info, all_worker2token2expert):
+    all_moe_solutions = {}
+    for op_name in moe_layer_info:
+        moe_layer = moe_layer_info[op_name]
+        N, E, C, M = moe_layer.NECM
+
+        expert2worker = [ep_id // (E // N) for ep_id in range(E)]
+        worker2token2expert = all_worker2token2expert[op_name]
+        metric = _workload_metric(worker2token2expert, expert2worker)
+        for _ in range(15):
+            tmp_mapping = _random_change_mapping(expert2worker, N)
+            tmp_metric = _workload_metric(worker2token2expert, tmp_mapping)
+            if tmp_metric < metric:
+                metric = tmp_metric
+                expert2worker = tmp_mapping
+
+        all_moe_solutions[op_name] = MoESolution(expert2worker, expert_shadow)
     return all_moe_solutions
 
 if __name__ == '__main__':      
@@ -347,5 +382,17 @@ if __name__ == '__main__':
                                for worker_id in range(N)]
 
     all_moe_solutions = test_oem(moe_layer_info, all_worker2token2expert)
+    G = dynamic_graph.finalize_graph(all_moe_solutions, all_worker2token2expert)
+    DynamicGraph.replay(G)
+
+    all_moe_solutions = test_fast_moe(moe_layer_info, all_worker2token2expert)
+    G = dynamic_graph.finalize_graph(all_moe_solutions, all_worker2token2expert)
+    DynamicGraph.replay(G)
+
+    all_moe_solutions = test_faster_moe(moe_layer_info, all_worker2token2expert)
+    G = dynamic_graph.finalize_graph(all_moe_solutions, all_worker2token2expert)
+    DynamicGraph.replay(G)
+
+    all_moe_solutions = test_random(moe_layer_info, all_worker2token2expert)
     G = dynamic_graph.finalize_graph(all_moe_solutions, all_worker2token2expert)
     DynamicGraph.replay(G)
