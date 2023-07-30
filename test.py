@@ -7,7 +7,7 @@ import networkx as nx
 import dpro
 from dpro.trace_utils import gen_long_name
 
-from expert import Expert, DynamicGraph, MoEAssign
+from expert import Expert, MoELayer, DynamicGraph, MoESolution
 import core
 
 dpro.init(".workspace/", "test")
@@ -79,12 +79,11 @@ def parse_rawtrace(path=".workspace/rawtrace.json"):
                 event["args"]["NECM"] = (N, E, C, M)
 
                 experts = [Expert(expert_id, (N, E, C, M), moe_layer_id=name) for expert_id in range(E)]
-                moe_layer_info[name] = experts
+                moe_layer_info[name] = MoELayer(experts)
             else:
                 unsure_event_ids.add(event_id)
-                experts = moe_layer_info[name]
             ### Collect info for graph construction
-            dynamic_graph.met_expert_for_all_worker(experts, phase)
+            dynamic_graph.met_expert_for_all_worker(moe_layer_info[name], phase)
             prev_trace_name = None
         else:
             ### Collect info for graph construction
@@ -126,7 +125,7 @@ def cal_bw_to_fw_ratio(op_stat: Dict, events: List, unsure_event_ids: set):
     
 
 def correct_unsure_event_ts(op_stat: Dict, events: List, unsure_event_ids: set, 
-         moe_layer_info: Dict[str, List[Expert]], bw_to_fw_ratio: float):
+         moe_layer_info: Dict[str, MoELayer], bw_to_fw_ratio: float):
     # Correct the duration of Expert ops,
     # Calcudate the execution time of AllToAll and add corrresponding events to the traces
     for expert_name in moe_layer_info:
@@ -228,6 +227,85 @@ def dump_traces(events, workspace=".workspace"):
             "traceEvents": events
         }, fp, indent=4)
 
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), "3rdparty", "OEM-MoE"))
+import algorithm as moe_scheduler
+
+def migrate_expert(expert2worker, source_worker, target_worker, ep_id):
+    assert expert2worker[ep_id] == source_worker
+    expert2worker[ep_id] = target_worker
+
+
+def test_oem(moe_layer_info, all_worker2token2expert):
+    all_moe_solutions = {}
+
+    for op_name in moe_layer_info:
+        moe_layer = moe_layer_info[op_name]
+        N, E, C, M = moe_layer.NECM
+
+        # capacity for each worker
+        # TODO (huhanpeng): use the real value
+        memory_cap_of_each_worker = [1000 for _ in range(N)]
+        param_size_of_expert = np.ones(E, dtype=float) * 3
+
+        worker2token2expert = all_worker2token2expert[op_name]
+        token_target_expert = np.zeros((N, E))
+        for worker_id in range(N):
+            for expert_id in worker2token2expert[worker_id]:
+                token_target_expert[worker_id][expert_id] += 1
+        del worker_id, expert_id
+        
+        rst = moe_scheduler.opt.oem_solver(N, E,
+                memory_cap_of_each_worker,
+                token_target_expert,
+                param_size_of_expert,
+                num_time_slots = 30,
+                cache_dir = ".workspace/OEM"
+            )
+
+        expert2worker = [ep_id // (E // N) for ep_id in range(E)]
+        for ep_id in range(E):
+            for source_worker_id in range(M):
+                for target_worker_id in range(M):
+                    if rst.s[ep_id, source_worker_id, target_worker_id] == 1:
+                        migrate_expert(expert2worker,
+                            source_worker_id, target_worker_id, ep_id)
+
+        all_moe_solutions[op_name] = MoESolution(expert2worker, worker2token2expert)
+
+    return all_moe_solutions
+
+def test_fast_moe(moe_layer_info, all_worker2token2expert):
+    all_moe_solutions = {}
+    for op_name in moe_layer_info:
+        moe_layer = moe_layer_info[op_name]
+        N, E, C, M = moe_layer.NECM
+        expert2worker = [ep_id // (E // N) for ep_id in range(E)]
+        all_moe_solutions[op_name] = MoESolution(expert2worker)
+
+    return all_moe_solutions
+
+def test_faster_moe(moe_layer_info, all_worker2token2expert):
+    all_moe_solutions = {}
+    for op_name in moe_layer_info:
+        moe_layer = moe_layer_info[op_name]
+        N, E, C, M = moe_layer.NECM
+        expert2worker = [ep_id // (E // N) for ep_id in range(E)]
+
+        worker2token2expert = all_worker2token2expert[op_name]
+        all_global_expert_count = np.zeros(E)
+        for worker_id in range(N):
+            for expert_id in worker2token2expert[worker_id]:
+                all_global_expert_count[expert_id] += 1
+        expert_shadow = moe_scheduler.shadow_policy.shadow_policy(
+            all_global_expert_count, M, E)
+
+        all_moe_solutions[op_name] = MoESolution(expert2worker, expert_shadow)
+
+    return all_moe_solutions
+
+def test_random(moe_layer_info, all_worker2token2expert):
+    return all_moe_solutions
 
 if __name__ == '__main__':      
     op_stat, events, unsure_event_ids, moe_layer_info, dynamic_graph = parse_rawtrace()
@@ -239,19 +317,12 @@ if __name__ == '__main__':
                             moe_layer_info, bw_to_fw_ratio)
         
     dump_traces(events)
-    
+
     ### Assign node avg
     for op_name in op_stat:
         if op_name in moe_layer_info:
-            experts = moe_layer_info[op_name]
-
-            fw_dur = events[op_stat[op_name]["fw_event_id"]]["dur"] / 1e3
-            for expert in experts:
-                expert.set_comp_time_arg(fw_dur, bw_to_fw_ratio)
-
-            t_all_to_all = events[op_stat[op_name]["pre-calc_FW_event_id"]]["dur"] / 1e3
-            for expert in experts:
-                expert.set_comm_time_arg(t_all_to_all, core.INTRA_MACHINE_BW)
+            moe_layer = moe_layer_info[op_name]
+            moe_layer.set_comm_time(op_stat, events, bw_to_fw_ratio)
         elif "update_event_id" in op_stat[op_name]:
             ### Update ops
             rawname = gen_rawname("UPDATE_", op_name)
@@ -266,18 +337,15 @@ if __name__ == '__main__':
             avg = events[op_stat[op_name]["bw_event_id"]]["dur"] / 1e3
             dynamic_graph.set_avg_for_all_worker(rawname, avg)
 
-    import numpy as np
-    moe_assignments = {}
+    token_num = 5
+    all_worker2token2expert = {}
     for op_name in moe_layer_info:
-        experts = moe_layer_info[op_name]
-        N, E, C, M = experts[0].NECM
-
-        expert2worker = [ep_id // (E // N) for ep_id in range(E)]
+        moe_layer = moe_layer_info[op_name]
+        N, E, C, M = moe_layer.NECM
         expert_list = list(range(E))
-        token_num = 5
-        worker2token2expert = [np.random.choice(expert_list, token_num) for worker_id in range(N)]
+        worker2token2expert = [np.random.choice(expert_list, token_num) 
+                               for worker_id in range(N)]
 
-        moe_assignments[op_name] = MoEAssign(expert2worker, worker2token2expert)
-
-    G = dynamic_graph.finalize_graph(moe_assignments)
+    all_moe_solutions = test_oem(moe_layer_info, all_worker2token2expert)
+    G = dynamic_graph.finalize_graph(all_moe_solutions, all_worker2token2expert)
     DynamicGraph.replay(G)
