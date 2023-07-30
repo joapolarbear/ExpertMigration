@@ -1,0 +1,3 @@
+[submodule "3rdparty/OEM-MoE"]
+	path = 3rdparty/OEM-MoE
+	url = https://github.com/zzhangcs/OEM-MoE.git
