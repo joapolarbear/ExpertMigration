@@ -386,17 +386,19 @@ class DynamicGraph:
         return G
 
     @staticmethod
-    def replay(G):
+    def replay(G, workspace):
         replayer = Replayer(dag=G, _step_num=1, leaf_dirs=None, 
-                        dump_path=".workspace/",
+                        dump_path=workspace,
                         comm_backend="default",
                         byteps_graph=None)
 
-        # import pdb; pdb.set_trace()
         replayer.replay(verbose=False)
         cal_edge_cost(replayer.exct_dag)
-        critical_path = dag_longest_path(replayer.exct_dag, None, 
-                            weight="cost", default_weight=0, _debug_level=1)
+        critical_path_with_len = dag_longest_path(replayer.exct_dag, None, 
+                            weight="cost", default_weight=0, _debug_level=0)
+        crt_path, len_list = zip(*critical_path_with_len)
+        length = sum(len_list)
+        return length
 
 
 def gen_full_graph(expert2worker: List[int], worker2token2expert, worker_num):

@@ -19,6 +19,22 @@ def migrate_expert(expert2worker, source_worker, target_worker, ep_id):
     assert expert2worker[ep_id] == source_worker
     expert2worker[ep_id] = target_worker
 
+def _workload_metric(all_token_to_expert, expert2worker, worker_num):
+    load_per_worker = np.zeros(worker_num)
+    for ep_id in all_token_to_expert:
+        load_per_worker[expert2worker[ep_id]] += 1
+    load_per_worker /= sum(load_per_worker)
+    return np.linalg.norm(load_per_worker)
+
+def measure_solution_balance_ratio(all_moe_solutions, all_worker2token2expert, worker_num):
+    all_metrics = []
+    for op_name in all_moe_solutions:
+        worker2token2expert = all_worker2token2expert[op_name]
+        all_token_to_expert = np.array(worker2token2expert).flatten()
+        metric = _workload_metric(all_token_to_expert, 
+                                all_moe_solutions[op_name].expert2worker, worker_num)
+        all_metrics.append(metric)
+    return np.mean(all_metrics)
 
 def test_oem(moe_layer_info, all_worker2token2expert, worker_num, expert_num):
     all_moe_solutions = {}
@@ -54,6 +70,8 @@ def test_oem(moe_layer_info, all_worker2token2expert, worker_num, expert_num):
         print(f"[OEM Policy] use mapping {expert2worker} for moe layer {op_name}")
         all_moe_solutions[op_name] = MoESolution(expert2worker)
 
+    _workload_metric(all_token_to_expert, expert2worker, worker_num)
+
     return all_moe_solutions
 
 def test_fast_moe(moe_layer_info, all_worker2token2expert, worker_num, expert_num):
@@ -79,19 +97,13 @@ def test_faster_moe(moe_layer_info, all_worker2token2expert, worker_num, expert_
         expert_shadow = shadow_policy.shadow_policy(
             all_global_expert_count, M, expert_num)
         
-        print(f"Shadow decision ", expert_shadow)
+        print(f"Shadow decision ", np.where(np.array(expert_shadow) == True))
 
         all_moe_solutions[op_name] = MoESolution(expert2worker, expert_shadow)
 
     return all_moe_solutions
 
 import random
-def _workload_metric(all_token_to_expert, expert2worker, worker_num):
-    load_per_worker = np.zeros(worker_num)
-    for ep_id in all_token_to_expert:
-        load_per_worker[expert2worker[ep_id]] += 1
-    load_per_worker /= sum(load_per_worker)
-    return np.linalg.norm(load_per_worker)
 
 def _random_change_mapping(expert2worker, num_worker):
     assert num_worker > 1
@@ -119,7 +131,8 @@ def test_random(moe_layer_info, all_worker2token2expert, worker_num, expert_num)
                 metric = tmp_metric
                 expert2worker = tmp_mapping
 
-        print(f"[Random policy] use {expert2worker} for moe layer {op_name}")
+        # print(f"[Random policy] use {expert2worker} for moe layer {op_name}")
 
         all_moe_solutions[op_name] = MoESolution(expert2worker)
+
     return all_moe_solutions
