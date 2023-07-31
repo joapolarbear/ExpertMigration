@@ -393,7 +393,7 @@ class DynamicGraph:
                         byteps_graph=None)
 
         # import pdb; pdb.set_trace()
-        replayer.replay(verbose=True)
+        replayer.replay(verbose=False)
         cal_edge_cost(replayer.exct_dag)
         critical_path = dag_longest_path(replayer.exct_dag, None, 
                             weight="cost", default_weight=0, _debug_level=1)
