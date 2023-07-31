@@ -84,7 +84,7 @@ def run_test(moe_layer_info, dynamic_graph, workspace, distribution_id=0):
             worker_num, expert_num, token_num, moe_layer_info, method=distribution_id)
 
         for method_name, test_func in [
-            # ("OEM", algo_entry.test_oem),
+            ("OEM", algo_entry.test_oem),
             ("FastMoE", algo_entry.test_fast_moe),
             ("FasterMoE", algo_entry.test_faster_moe),
             ("Random", algo_entry.test_random)

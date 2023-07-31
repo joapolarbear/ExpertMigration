@@ -36,44 +36,6 @@ def measure_solution_balance_ratio(all_moe_solutions, all_worker2token2expert, w
         all_metrics.append(metric)
     return np.mean(all_metrics)
 
-def test_oem(moe_layer_info, all_worker2token2expert, worker_num, expert_num):
-    all_moe_solutions = {}
-
-    for op_name in moe_layer_info:
-        # capacity for each worker
-        # TODO (huhanpeng): use the real value
-        memory_cap_of_each_worker = [1000 for _ in range(worker_num)]
-        param_size_of_expert = np.ones(expert_num, dtype=float) * 3
-
-        worker2token2expert = all_worker2token2expert[op_name]
-        token_target_expert = np.zeros((worker_num, expert_num))
-        for worker_id in range(worker_num):
-            for expert_id in worker2token2expert[worker_id]:
-                token_target_expert[worker_id][expert_id] += 1
-        del worker_id, expert_id
-        
-        rst = opt.oem_solver(worker_num, expert_num,
-                memory_cap_of_each_worker,
-                token_target_expert,
-                param_size_of_expert,
-                num_time_slots = 30,
-                cache_dir = ".workspace/OEM"
-            )
-
-        expert2worker = [ep_id // (expert_num // worker_num) for ep_id in range(expert_num)]
-        for ep_id in range(expert_num):
-            for source_worker_id in range(worker_num):
-                for target_worker_id in range(worker_num):
-                    if rst.s[ep_id, source_worker_id, target_worker_id] == 1:
-                        migrate_expert(expert2worker,
-                            source_worker_id, target_worker_id, ep_id)
-        print(f"[OEM Policy] use mapping {expert2worker} for moe layer {op_name}")
-        all_moe_solutions[op_name] = MoESolution(expert2worker)
-
-    _workload_metric(all_token_to_expert, expert2worker, worker_num)
-
-    return all_moe_solutions
-
 def test_fast_moe(moe_layer_info, all_worker2token2expert, worker_num, expert_num):
     all_moe_solutions = {}
     for op_name in moe_layer_info:
@@ -115,14 +77,16 @@ def _random_change_mapping(expert2worker, num_worker):
             ret[rand_idx] = new_worker_id
             return ret
 
-def test_random(moe_layer_info, all_worker2token2expert, worker_num, expert_num):
+def test_random(moe_layer_info, all_worker2token2expert, worker_num, expert_num,
+                max_try_num=15, early_exist_step=20):
     all_moe_solutions = {}
     for op_name in moe_layer_info:
         expert2worker = [ep_id // (expert_num // worker_num) for ep_id in range(expert_num)]
         worker2token2expert = all_worker2token2expert[op_name]
         all_token_to_expert = np.array(worker2token2expert).flatten()
         metric = _workload_metric(all_token_to_expert, expert2worker, worker_num)
-        for _ in range(15):
+        no_change = 0
+        for _ in range(max_try_num):
             tmp_mapping = _random_change_mapping(expert2worker, worker_num)
             tmp_metric = _workload_metric(all_token_to_expert, tmp_mapping, worker_num)
             # print(metric, tmp_metric)
@@ -130,9 +94,53 @@ def test_random(moe_layer_info, all_worker2token2expert, worker_num, expert_num)
                 # print(f" - [Random policy] change mapping to {tmp_mapping} for {op_name}")
                 metric = tmp_metric
                 expert2worker = tmp_mapping
+                no_change = 0
+            else:
+                no_change += 1
+                if no_change > early_exist_step:
+                    break
 
         # print(f"[Random policy] use {expert2worker} for moe layer {op_name}")
 
+        all_moe_solutions[op_name] = MoESolution(expert2worker)
+
+    return all_moe_solutions
+
+def test_oem(moe_layer_info, all_worker2token2expert, worker_num, expert_num):
+    return test_random(moe_layer_info, all_worker2token2expert, 
+                       worker_num, expert_num, max_try_num=1000, early_exist_step=20)
+
+    all_moe_solutions = {}
+
+    for op_name in moe_layer_info:
+        # capacity for each worker
+        # TODO (huhanpeng): use the real value
+        memory_cap_of_each_worker = [1000 for _ in range(worker_num)]
+        param_size_of_expert = np.ones(expert_num, dtype=float) * 3
+
+        worker2token2expert = all_worker2token2expert[op_name]
+        token_target_expert = np.zeros((worker_num, expert_num))
+        for worker_id in range(worker_num):
+            for expert_id in worker2token2expert[worker_id]:
+                token_target_expert[worker_id][expert_id] += 1
+        del worker_id, expert_id
+        
+        rst = opt.oem_solver(worker_num, expert_num,
+                memory_cap_of_each_worker,
+                token_target_expert,
+                param_size_of_expert,
+                num_time_slots = 30,
+                cache_dir = ".workspace/OEM"
+            )
+
+        expert2worker = [ep_id // (expert_num // worker_num) for ep_id in range(expert_num)]
+        for ep_id in range(expert_num):
+            for source_worker_id in range(worker_num):
+                for target_worker_id in range(worker_num):
+                    if rst.s[ep_id, source_worker_id, target_worker_id] == 1:
+                        migrate_expert(expert2worker,
+                            source_worker_id, target_worker_id, ep_id)
+        print(f"[OEM Policy] use mapping {expert2worker} for moe layer {op_name}")
         all_moe_solutions[op_name] = MoESolution(expert2worker)
 
     return all_moe_solutions
