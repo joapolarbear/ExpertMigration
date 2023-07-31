@@ -4,8 +4,11 @@ from utils import gen_pid
 
 # intra-machine bandwidth for A100 GPUs, in GB/s
 INTRA_MACHINE_BW = 25
+# inter-machine bandwidth, in GB/s
+INTER_MACHINE_BW = 1000 / 8 / 1024
 
-INTER_MACHINE_BW = 8
+# set according to the profiling result, # of token / s
+COMP_THROUGHPUT = None
 
 HOST_NUM = None
 LOCAL_RANK_NUM = None

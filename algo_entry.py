@@ -16,7 +16,9 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "3rdparty", "OEM-MoE"))
 from algorithm import opt, shadow_policy
 
 def migrate_expert(expert2worker, source_worker, target_worker, ep_id):
-    assert expert2worker[ep_id] == source_worker
+    if expert2worker[ep_id] != source_worker:
+        print(f"[Warning] s_{ep_id}^{source_worker}{target_worker}=1 is invalid")
+        return
     expert2worker[ep_id] = target_worker
 
 def _workload_metric(all_token_to_expert, expert2worker, worker_num):
@@ -57,7 +59,8 @@ def test_faster_moe(moe_layer_info, all_worker2token2expert, worker_num, expert_
             for expert_id in worker2token2expert[worker_id]:
                 all_global_expert_count[expert_id] += 1
         expert_shadow = shadow_policy.shadow_policy(
-            all_global_expert_count, M, expert_num)
+            all_global_expert_count, M, expert_num,
+            bw_net=core.INTRA_MACHINE_BW, bw_mm=core.COMP_THROUGHPUT)
         
         print(f"Shadow decision ", np.where(np.array(expert_shadow) == True))
 
@@ -107,8 +110,8 @@ def test_random(moe_layer_info, all_worker2token2expert, worker_num, expert_num,
     return all_moe_solutions
 
 def test_oem(moe_layer_info, all_worker2token2expert, worker_num, expert_num):
-    return test_random(moe_layer_info, all_worker2token2expert, 
-                       worker_num, expert_num, max_try_num=1000, early_exist_step=20)
+    # return test_random(moe_layer_info, all_worker2token2expert, 
+    #                    worker_num, expert_num, max_try_num=1000, early_exist_step=20)
 
     all_moe_solutions = {}
 

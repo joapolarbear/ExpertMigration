@@ -231,7 +231,8 @@ def parse_workload_trace(workspace=".workspace/traces"):
     cache_path = os.path.join(workspace, "cache.pickle")
     if os.path.exists(cache_path):
         with open(cache_path, "rb") as fp:
-            moe_layer_info, dynamic_graph = pickle.load(fp)
+            moe_layer_info, dynamic_graph, _comp_throughput = pickle.load(fp)
+        core.COMP_THROUGHPUT = _comp_throughput
         print(f"Load cached workload trace parsed result from {cache_path}")
         return moe_layer_info, dynamic_graph
     
@@ -266,7 +267,7 @@ def parse_workload_trace(workspace=".workspace/traces"):
             dynamic_graph.set_avg_for_all_worker(rawname, avg)
 
     with open(cache_path, "wb") as fp:
-        pickle.dump([moe_layer_info, dynamic_graph], fp)
+        pickle.dump([moe_layer_info, dynamic_graph, core.COMP_THROUGHPUT], fp)
     
     return moe_layer_info, dynamic_graph
 

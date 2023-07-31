@@ -3,6 +3,7 @@ import os
 import numpy as np
 from typing import List, Dict
 import networkx as nx
+import random
 
 import dpro
 
@@ -13,6 +14,8 @@ import parse_trace
 import core
 
 dpro.init(".workspace/", "test")
+random.seed(0)
+np.random.seed(0)
 
 def gen_distribution(worker_num, expert_num, token_num, moe_layer_info, method=0):
     all_worker2token2expert = {}
@@ -73,6 +76,9 @@ def run_test(moe_layer_info, dynamic_graph, workspace, distribution_id=0):
         if rst_key not in rst:
             rst[rst_key] =  [(-1, -1)] * len(METHODS)
 
+        print("\n\n>>>>>>>>>>>>>>>>>>>>>>")
+        print("D, H x G x E' = ", rst_key, "\n")
+        
         core.HOST_NUM = host_num
         core.LOCAL_RANK_NUM = local_rank_num
 
@@ -89,7 +95,7 @@ def run_test(moe_layer_info, dynamic_graph, workspace, distribution_id=0):
             ("FasterMoE", algo_entry.test_faster_moe),
             ("Random", algo_entry.test_random)
         ]:
-            print("\n")
+            # print("\n")
             dynamic_graph.reset()
             all_moe_solutions = test_func(moe_layer_info, all_worker2token2expert, worker_num, expert_num)
             balance_ratio = algo_entry.measure_solution_balance_ratio(all_moe_solutions, 

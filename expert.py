@@ -155,14 +155,6 @@ class MoELayer:
         
     ### Set boundaries
     def register_boudary_in(self, phase, non_expert_in):
-        # if phase == "FW":
-        #     for expert in self.experts:
-        #         expert.non_expert_boundary["fw_in"] = non_expert_in
-        # elif phase == "BW":
-        #     for expert in self.experts:
-        #         expert.non_expert_boundary["bw_in"] = non_expert_in
-        # else:
-        #     raise
         if phase == "FW":
             self.non_expert_boundary["fw_in"] = non_expert_in
         elif phase == "BW":
@@ -171,16 +163,6 @@ class MoELayer:
             raise
     
     def register_boundary_out(self, phase, non_expert_out):
-        # if phase == "FW":
-        #     print(f" - One time hook adds dependency {phase}.{self.moe_layer_id} --> {non_expert_out}")
-        #     for expert in self.experts:
-        #         expert.non_expert_boundary["fw_out"] = non_expert_out
-        # elif phase == "BW":
-        #     print(f" - One time hook adds dependency {phase}.{self.moe_layer_id} --> {non_expert_out}")
-        #     for expert in self.experts:
-        #         expert.non_expert_boundary["bw_out"] = non_expert_out
-        # else:
-        #     raise
         if phase == "FW":
             print(f" - One time hook adds dependency {phase}.{self.moe_layer_id} --> {non_expert_out}")
             self.non_expert_boundary["fw_out"] = non_expert_out
@@ -196,14 +178,16 @@ class MoELayer:
         N, E, C, M = self.NECM
         self.k_expert = fw_dur / (C * M * E)
         self.bw_to_fw_ratio = bw_to_fw_ratio
-    
+
+        one_token_fw_time = self.get_comp_time_for_one_expert(1, "FW") / 1e3
+        core.COMP_THROUGHPUT = 1 / one_token_fw_time
+
     def set_comm_time_arg(self, t_all_to_all, bandwidth):
         assert self.experts is None
         N, E, C, M = self.NECM
         self.k_comm = (t_all_to_all * bandwidth * N) / (E * C * M * (N - 1))
     
     def get_comp_time_for_one_expert(self, token_num, phase):
-        assert self.experts is not None
         N, E, C, M = self.NECM
         if phase == "FW":
             return self.k_expert * token_num * M
@@ -213,7 +197,6 @@ class MoELayer:
             raise
     
     def get_p2p_comm_time(self, token_num, source_worker, target_worker):
-        assert self.experts is not None
         N, E, C, M = self.NECM
         bandwidth = core.get_bandwidth(source_worker, target_worker)
         return self.k_comm * token_num * M / bandwidth  
@@ -336,7 +319,8 @@ class DynamicGraph:
 
     def finalize_graph(self, all_moe_solution: Dict[str, MoESolution],
                     all_worker2token2expert: Dict, 
-                    worker_num=None) -> nx.DiGraph:
+                    worker_num=None,
+                    moe_layer_only=True) -> nx.DiGraph:
         '''
         all_worker2token2expert: a dict, where the key is the moe layer id, 
             and the value is worker2token2expert of shape = [N_worker, N_token], 
@@ -349,6 +333,7 @@ class DynamicGraph:
 
         _worker_num = worker_num or self.ep_world_size
         G = nx.DiGraph()
+
         _edges_to_add = []
         for worker_id in range(_worker_num):
             _pid = core.worker_id_to_pid(worker_id)
@@ -363,9 +348,9 @@ class DynamicGraph:
             _pid = core.worker_id_to_pid(worker_id)
             for rawname, _avg in self.rawname2avg.items():
                 op_name = gen_long_name(_pid, rawname) 
-                _node2avg[op_name] = _avg
+                _node2avg[op_name] = _avg if not moe_layer_only else 0
         nx.set_node_attributes(G, _node2avg, name="avg")
-
+    
         for moe_layer_id, moe_solution in all_moe_solution.items():
             required_expert_num = len(moe_solution.expert2worker)
 
