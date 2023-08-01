@@ -14,8 +14,9 @@ import parse_trace
 import core
 
 dpro.init(".workspace/", "test")
-random.seed(0)
-np.random.seed(0)
+seed = 0
+random.seed(seed)
+np.random.seed(seed)
 
 def gen_distribution(worker_num, expert_num, token_num, moe_layer_info, method=0):
     all_worker2token2expert = {}
@@ -49,7 +50,7 @@ def run_test(moe_layer_info, dynamic_graph, workspace, distribution_id=0):
     ########################################################################
     ### Test
 
-    METHODS = ["OEM", "FastMoE", "FasterMoE", "Random"]
+    METHODS = ["OEM", "FastMoE", "FasterMoE", "Random", "Ideal"]
 
     rst_path = os.path.join(workspace, "rst.json")
     try:
@@ -61,7 +62,7 @@ def run_test(moe_layer_info, dynamic_graph, workspace, distribution_id=0):
     # df.set_index(["TokenDist", "host_num", "local_rank_num", "local_ep_num"])
 
     ### number of tokens per worker
-    token_num = 32
+    token_num = 512
     for host_num, local_rank_num, local_ep_num in [
         [1, 4, 1],
         [1, 4, 2],
@@ -93,7 +94,8 @@ def run_test(moe_layer_info, dynamic_graph, workspace, distribution_id=0):
             ("OEM", algo_entry.test_oem),
             ("FastMoE", algo_entry.test_fast_moe),
             ("FasterMoE", algo_entry.test_faster_moe),
-            ("Random", algo_entry.test_random)
+            ("Random", algo_entry.test_random),
+            ("Ideal", algo_entry.test_ideal)
         ]:
             # print("\n")
             dynamic_graph.reset()
@@ -107,8 +109,12 @@ def run_test(moe_layer_info, dynamic_graph, workspace, distribution_id=0):
             G = dynamic_graph.finalize_graph(all_moe_solutions, all_worker2token2expert, worker_num)
             iter_time = DynamicGraph.replay(G, workspace)
             print(method_name, iter_time)
-            rst[rst_key][METHODS.index(method_name)] = [iter_time, balance_ratio]
 
+            _method_idx = METHODS.index(method_name)
+            if _method_idx >= len(rst[rst_key]):
+                rst[rst_key] += [(-1, -1)] * (_method_idx + 1 - len(rst[rst_key]))
+            rst[rst_key][_method_idx] = [iter_time, balance_ratio]
+        
     with open(rst_path, 'w') as fp:
         json.dump(rst, fp, indent=4)
 
@@ -118,10 +124,10 @@ if __name__ == '__main__':
     moe_layer_info, dynamic_graph = parse_trace.parse_workload_trace(workspace)
 
     for distribution_id in [
-        0, 
+        # 0, 
         1, 
-        2, 
-        3
+        # 2, 
+        # 3
     ]:
         run_test(moe_layer_info, dynamic_graph, workspace, distribution_id=distribution_id)
 

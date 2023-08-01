@@ -52,7 +52,7 @@ class Expert:
             return gen_long_name(_prefix, name)
 
     def expert_graph_for_one_worker(self, token_ids: list, 
-            predecessor_worker_id, phase="FW", output_graph=None):
+            predecessor_worker_id, phase="FW", output_graph=None, virtual=False):
         ''' Build the corresponding expert graph corresponds to tokens transmitted from 
         `predecessor_worker_id` to thie expert
 
@@ -82,8 +82,11 @@ class Expert:
         expert_boundary_out = set()
 
         ### decide the execution time
-        expert_comp_time = self.moe_layer.get_comp_time_for_one_expert(self.pipeline_degree, phase)
-        per_token_comm_time = self.moe_layer.get_p2p_comm_time(self.pipeline_degree, predecessor_worker_id, self.worker_id)
+        if virtual:
+            expert_comp_time = per_token_comm_time = 0
+        else:
+            expert_comp_time = self.moe_layer.get_comp_time_for_one_expert(self.pipeline_degree, phase)
+            per_token_comm_time = self.moe_layer.get_p2p_comm_time(self.pipeline_degree, predecessor_worker_id, self.worker_id)
 
         for token_id in token_ids:
             if predecessor_worker_pid == self.pid:
@@ -200,7 +203,8 @@ class MoELayer:
     def get_p2p_comm_time(self, token_num, source_worker, target_worker):
         N, E, C, M = self.NECM
         bandwidth = core.get_bandwidth(source_worker, target_worker)
-        return self.k_comm * token_num * M / bandwidth  
+        return self.k_comm * token_num * M / bandwidth 
+        # return 1e-3 * token_num * M / bandwidth
     
     def set_comm_comp_time(self, op_stat, events, bw_to_fw_ratio):
         assert self.experts is None
@@ -243,6 +247,9 @@ class MoELayer:
                 residual = max(residual, 1e3 * z[_k, _a, _i, _j, _t] / _bandwidth)
             self.coarse_ep_time = last_time_slot * moe_solution.time_slot_span + residual
             return
+        elif moe_solution.ideal:
+            self.coarse_ep_time = -1
+            return
     
         ### Map experts to workers and shadow decision
         for ep_id, expert in enumerate(self.experts):
@@ -251,11 +258,14 @@ class MoELayer:
                 if moe_solution.expert_shadow is not None:
                     expert.is_shadow = moe_solution.expert_shadow[ep_id]
     
-    def apply_token_distribution(self, worker2token2expert, graph):
+    def apply_token_distribution(self, worker2token2expert, graph, moe_layer_only):
         assert self.experts is not None
         N, E, C, M = self.NECM
         
         if self.coarse_ep_time is not None:
+            if self.coarse_ep_time < 0:
+                self.coarse_ep_time = 1e3 * len(worker2token2expert[0]) / core.COMP_THROUGHPUT
+            # print(len(worker2token2expert[0]))
             print(f"Use coarse grained expert time {self.coarse_ep_time}")
             for worker_id in range(N):
                 _pid = core.worker_id_to_pid(worker_id)
@@ -272,7 +282,13 @@ class MoELayer:
                     coase_op = gen_long_name(_pid, f"{phase}.{self.moe_layer_id}.Coarse")
                     edges_to_add.append((boundary_in_op, coase_op))
                     edges_to_add.append((coase_op, boundary_out_op))
-                    node_attrs[coase_op] = self.coarse_ep_time * (1 if phase == "FW" else self.bw_to_fw_ratio)
+                    if phase == "FW":
+                        _ratio = 1
+                    elif moe_layer_only:
+                        _ratio = 0
+                    else:
+                        _ratio = self.bw_to_fw_ratio
+                    node_attrs[coase_op] = self.coarse_ep_time * _ratio
                 
                 _add_edge_f("FW")
                 _add_edge_f("BW")
@@ -291,8 +307,7 @@ class MoELayer:
                     worker_id, phase="FW", output_graph=graph)
 
                 expert.expert_graph_for_one_worker(worker2expert2tokens[worker_id][expert.expert_id],
-                    worker_id, phase="BW", output_graph=graph)
-    
+                    worker_id, phase="BW", output_graph=graph, virtual=moe_layer_only)
 
 
 class MoESolution:
@@ -301,7 +316,8 @@ class MoESolution:
     def __init__(self, expert2worker: List[int],
                  expert_shadow: List[bool] = None,
                  allocation_per_timeslot = None,
-                 time_slot_span = None):
+                 time_slot_span = None,
+                 ideal = False):
         '''
         Parameters
         ----------
@@ -318,6 +334,7 @@ class MoESolution:
         self.expert_shadow = expert_shadow
         self.allocation_per_timeslot = allocation_per_timeslot
         self.time_slot_span = time_slot_span # in ms
+        self.ideal = ideal
 
 
 class DynamicGraph:
@@ -416,7 +433,7 @@ class DynamicGraph:
             moe_layer.apply_moe_solution(moe_solution)
 
             ### Apply token distribution
-            moe_layer.apply_token_distribution(worker2token2expert, G)
+            moe_layer.apply_token_distribution(worker2token2expert, G, moe_layer_only)
 
         return G
 

@@ -114,15 +114,18 @@ def test_random(moe_layer_info, all_worker2token2expert, worker_num, expert_num,
 def test_oem(moe_layer_info, all_worker2token2expert, worker_num, expert_num,
              cache_path = None, time_slot_span = 1):
     return test_random(moe_layer_info, all_worker2token2expert, 
-                       worker_num, expert_num, max_try_num=5000, early_exist_step=20)
+                       worker_num, expert_num, max_try_num=10000, early_exist_step=1000)
 
     all_moe_solutions = {}
 
     for op_name in moe_layer_info:
+        moe_layer = moe_layer_info[op_name]
+        N, E, C, M = moe_layer.NECM
+
         # capacity for each worker
         # TODO (huhanpeng): use the real value
-        memory_cap_of_each_worker = [1000 for _ in range(worker_num)]
-        param_size_of_expert = np.ones(expert_num, dtype=float) * 3
+        memory_cap_of_each_worker = [1024 for _ in range(worker_num)]
+        param_size_of_expert = np.ones(expert_num, dtype=float) * 8
 
         worker2token2expert = all_worker2token2expert[op_name]
         token_target_expert = np.zeros((worker_num, expert_num))
@@ -137,6 +140,7 @@ def test_oem(moe_layer_info, all_worker2token2expert, worker_num, expert_num,
                 param_size_of_expert,
                 num_time_slots = 30,
                 time_slot_span = time_slot_span,
+                d_model = M,
                 cache_path = cache_path
             )
 
@@ -152,3 +156,18 @@ def test_oem(moe_layer_info, all_worker2token2expert, worker_num, expert_num,
             expert2worker, allocation_per_timeslot=rst.z, time_slot_span=time_slot_span)
 
     return all_moe_solutions
+
+def test_ideal(moe_layer_info, all_worker2token2expert, worker_num, expert_num,
+             cache_path = None, time_slot_span = 1):
+    
+    all_moe_solutions = {}
+
+    for op_name in moe_layer_info:
+        moe_layer = moe_layer_info[op_name]
+        N, E, C, M = moe_layer.NECM
+
+        expert2worker = [ep_id // (expert_num // worker_num) for ep_id in range(expert_num)]
+        all_moe_solutions[op_name] = MoESolution(expert2worker, ideal=True)
+
+    return all_moe_solutions
+
