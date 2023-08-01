@@ -38,7 +38,8 @@ def measure_solution_balance_ratio(all_moe_solutions, all_worker2token2expert, w
         all_metrics.append(metric)
     return np.mean(all_metrics)
 
-def test_fast_moe(moe_layer_info, all_worker2token2expert, worker_num, expert_num):
+def test_fast_moe(moe_layer_info, all_worker2token2expert, worker_num, expert_num,
+                  cache_path = None):
     all_moe_solutions = {}
     for op_name in moe_layer_info:
         expert2worker = [ep_id // (expert_num // worker_num) for ep_id in range(expert_num)]
@@ -46,7 +47,8 @@ def test_fast_moe(moe_layer_info, all_worker2token2expert, worker_num, expert_nu
 
     return all_moe_solutions
 
-def test_faster_moe(moe_layer_info, all_worker2token2expert, worker_num, expert_num):
+def test_faster_moe(moe_layer_info, all_worker2token2expert, worker_num, expert_num,
+                    cache_path = None):
     all_moe_solutions = {}
     for op_name in moe_layer_info:
         moe_layer = moe_layer_info[op_name]
@@ -81,7 +83,7 @@ def _random_change_mapping(expert2worker, num_worker):
             return ret
 
 def test_random(moe_layer_info, all_worker2token2expert, worker_num, expert_num,
-                max_try_num=15, early_exist_step=20):
+                max_try_num=10, early_exist_step=50, cache_path = None):
     all_moe_solutions = {}
     for op_name in moe_layer_info:
         expert2worker = [ep_id // (expert_num // worker_num) for ep_id in range(expert_num)]
@@ -109,9 +111,10 @@ def test_random(moe_layer_info, all_worker2token2expert, worker_num, expert_num,
 
     return all_moe_solutions
 
-def test_oem(moe_layer_info, all_worker2token2expert, worker_num, expert_num):
-    # return test_random(moe_layer_info, all_worker2token2expert, 
-    #                    worker_num, expert_num, max_try_num=1000, early_exist_step=20)
+def test_oem(moe_layer_info, all_worker2token2expert, worker_num, expert_num,
+             cache_path = None, time_slot_span = 1):
+    return test_random(moe_layer_info, all_worker2token2expert, 
+                       worker_num, expert_num, max_try_num=5000, early_exist_step=20)
 
     all_moe_solutions = {}
 
@@ -133,7 +136,8 @@ def test_oem(moe_layer_info, all_worker2token2expert, worker_num, expert_num):
                 token_target_expert,
                 param_size_of_expert,
                 num_time_slots = 30,
-                cache_dir = ".workspace/OEM"
+                time_slot_span = time_slot_span,
+                cache_path = cache_path
             )
 
         expert2worker = [ep_id // (expert_num // worker_num) for ep_id in range(expert_num)]
@@ -144,6 +148,7 @@ def test_oem(moe_layer_info, all_worker2token2expert, worker_num, expert_num):
                         migrate_expert(expert2worker,
                             source_worker_id, target_worker_id, ep_id)
         print(f"[OEM Policy] use mapping {expert2worker} for moe layer {op_name}")
-        all_moe_solutions[op_name] = MoESolution(expert2worker)
+        all_moe_solutions[op_name] = MoESolution(
+            expert2worker, allocation_per_timeslot=rst.z, time_slot_span=time_slot_span)
 
     return all_moe_solutions

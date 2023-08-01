@@ -233,7 +233,7 @@ def parse_workload_trace(workspace=".workspace/traces"):
         with open(cache_path, "rb") as fp:
             moe_layer_info, dynamic_graph, _comp_throughput = pickle.load(fp)
         core.COMP_THROUGHPUT = _comp_throughput
-        print(f"Load cached workload trace parsed result from {cache_path}")
+        print(f"Load cached workload trace parsed result from {cache_path}, {core.COMP_THROUGHPUT}")
         return moe_layer_info, dynamic_graph
     
     op_stat, events, unsure_event_ids, moe_layer_info, dynamic_graph = parse_rawtrace(

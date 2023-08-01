@@ -97,7 +97,11 @@ def run_test(moe_layer_info, dynamic_graph, workspace, distribution_id=0):
         ]:
             # print("\n")
             dynamic_graph.reset()
-            all_moe_solutions = test_func(moe_layer_info, all_worker2token2expert, worker_num, expert_num)
+            all_moe_solutions = test_func(
+                moe_layer_info, all_worker2token2expert, 
+                worker_num, expert_num,
+                cache_path = os.path.join(
+                    workspace, "OEM_cache", f"{rst_key.replace(',', '_')}.pickle"))
             balance_ratio = algo_entry.measure_solution_balance_ratio(all_moe_solutions, 
                                         all_worker2token2expert, worker_num)
             G = dynamic_graph.finalize_graph(all_moe_solutions, all_worker2token2expert, worker_num)
@@ -109,7 +113,7 @@ def run_test(moe_layer_info, dynamic_graph, workspace, distribution_id=0):
         json.dump(rst, fp, indent=4)
 
 if __name__ == '__main__':
-    workspace = ".workspace/traces/toy_example"
+    workspace = ".workspace/traces/d_model_1024"
 
     moe_layer_info, dynamic_graph = parse_trace.parse_workload_trace(workspace)
 

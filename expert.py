@@ -1,6 +1,7 @@
 import networkx as nx
 from typing import List, Dict
 import copy
+import numpy as np
 
 from dpro.trace_utils import gen_long_name, parse_rawname
 from dpro.replay import Replayer
@@ -221,9 +222,28 @@ class MoELayer:
     
     def reset(self):
         self.experts = None
+        self.coarse_ep_time = None
 
     def apply_moe_solution(self, moe_solution):
         assert self.experts is not None
+        if moe_solution.allocation_per_timeslot is not None and \
+            moe_solution.time_slot_span is not None:
+            # rst.z[k, 3, i, j, t]
+            z = moe_solution.allocation_per_timeslot[:, [1, 3, 4], :, :, :]
+            non_zero_inds = z.nonzero() # [inds_k_array, inds_a_array, inds_i_array, ... ]
+            last_time_slot = max(non_zero_inds[-1])
+            # Select inds with largest inds_t
+            rst = [l[np.argwhere(non_zero_inds[-1] == np.amax(non_zero_inds[-1])).flatten()].tolist() for l in non_zero_inds]
+            residual = 0
+            # import pdb; pdb.set_trace()
+            for _k, _a, _i, _j, _t in zip(*rst):
+                if _a == 1:
+                    continue
+                _bandwidth = core.get_bandwidth(_i, _j)
+                residual = max(residual, 1e3 * z[_k, _a, _i, _j, _t] / _bandwidth)
+            self.coarse_ep_time = last_time_slot * moe_solution.time_slot_span + residual
+            return
+    
         ### Map experts to workers and shadow decision
         for ep_id, expert in enumerate(self.experts):
                 worker_id = moe_solution.expert2worker[ep_id]
@@ -234,6 +254,32 @@ class MoELayer:
     def apply_token_distribution(self, worker2token2expert, graph):
         assert self.experts is not None
         N, E, C, M = self.NECM
+        
+        if self.coarse_ep_time is not None:
+            print(f"Use coarse grained expert time {self.coarse_ep_time}")
+            for worker_id in range(N):
+                _pid = core.worker_id_to_pid(worker_id)
+                
+                edges_to_add = []
+                node_attrs = {}
+
+                def _add_edge_f(phase):
+                    boundary_in_op = gen_long_name(_pid, self.non_expert_boundary["fw_in"] 
+                                        if phase == "FW" else self.non_expert_boundary["bw_in"])
+                    boundary_out_op = gen_long_name(_pid, self.non_expert_boundary["fw_out"] 
+                                                if phase == "FW" else self.non_expert_boundary["bw_out"])
+                    
+                    coase_op = gen_long_name(_pid, f"{phase}.{self.moe_layer_id}.Coarse")
+                    edges_to_add.append((boundary_in_op, coase_op))
+                    edges_to_add.append((coase_op, boundary_out_op))
+                    node_attrs[coase_op] = self.coarse_ep_time * (1 if phase == "FW" else self.bw_to_fw_ratio)
+                
+                _add_edge_f("FW")
+                _add_edge_f("BW")
+                graph.add_edges_from(edges_to_add)
+                nx.set_node_attributes(graph, node_attrs, name="avg")
+                return 
+
         worker2expert2tokens = [[[] for _ in range(len(self.experts))] for _ in range(N)]
         for worker_id in range(N):
             for token_id, expert_id in enumerate(worker2token2expert[worker_id]):
@@ -253,7 +299,9 @@ class MoESolution:
     ''' The deployment solution for one MoE layer
     '''
     def __init__(self, expert2worker: List[int],
-                 expert_shadow: List[bool] = None):
+                 expert_shadow: List[bool] = None,
+                 allocation_per_timeslot = None,
+                 time_slot_span = None):
         '''
         Parameters
         ----------
@@ -268,6 +316,8 @@ class MoESolution:
         '''
         self.expert2worker = expert2worker
         self.expert_shadow = expert_shadow
+        self.allocation_per_timeslot = allocation_per_timeslot
+        self.time_slot_span = time_slot_span # in ms
 
 
 class DynamicGraph:
